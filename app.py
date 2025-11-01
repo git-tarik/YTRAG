@@ -3,15 +3,13 @@ import re
 import time
 import streamlit as st
 from urllib.parse import urlparse, parse_qs
-from operator import itemgetter  # +++ ADDED FOR CHAINING
+from operator import itemgetter
 
 # --- LangChain and other necessary imports ---
 from langchain_community.vectorstores import FAISS
 from langchain_core.output_parsers import StrOutputParser
-# +++ ADDED FOR CHAT HISTORY +++
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda, RunnableParallel, RunnablePassthrough
-# +++ ADDED FOR CHAT HISTORY MESSAGE FORMATTING +++
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -51,7 +49,6 @@ def get_video_id(url: str) -> str | None:
 def get_transcript(video_id: str, language: str) -> str | None:
     """
     Fetches and formats the transcript for a given video ID and language.
-    This implementation now strictly follows your provided code structure.
     """
     try:
         fetched_transcript_object = YouTubeTranscriptApi().fetch(video_id, languages=[language])
@@ -72,7 +69,6 @@ def get_transcript(video_id: str, language: str) -> str | None:
             pass
         return None
 
-# +++ NEW HELPER FUNCTION FOR CHAT MEMORY +++
 def format_chat_history(messages):
     """Formats chat history from Streamlit's message format to LangChain's format."""
     history = []
@@ -84,7 +80,6 @@ def format_chat_history(messages):
             history.append(AIMessage(content=msg["content"]))
     return history
 
-# +++ MODIFIED create_rag_chain FOR CHAT MEMORY AND BETTER FALLBACK +++
 def create_rag_chain(_transcript: str):
     """Creates a RAG chain with OpenAI embeddings + Google Gemini LLM."""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
@@ -98,7 +93,6 @@ def create_rag_chain(_transcript: str):
     vector_store = FAISS.from_documents(docs, embeddings)
     retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
 
-    # This is the prompt for the RAG chain. Note the specific instruction for out-of-context questions.
     rag_template = """
 You are a helpful assistant that answers questions based ONLY on the provided video transcript context.
 Your tone should be conversational and helpful.
@@ -111,7 +105,6 @@ CONTEXT:
 
 QUESTION: {question}
 """
-    # Using ChatPromptTemplate to handle conversation history
     prompt = ChatPromptTemplate.from_messages([
         ("system", rag_template),
         MessagesPlaceholder(variable_name="chat_history"),
@@ -119,7 +112,7 @@ QUESTION: {question}
     ])
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", # Using 1.5 Flash for better context following
+        model="gemini-1.5-flash",
         temperature=0.3,
         google_api_key=st.secrets["GOOGLE_API_KEY"]
     )
@@ -127,7 +120,6 @@ QUESTION: {question}
     def format_docs(retrieved_docs):
         return "\n\n".join(doc.page_content for doc in retrieved_docs)
 
-    # The chain now expects a dictionary with "question" and "chat_history"
     rag_chain = (
         {
             "context": itemgetter("question") | retriever | RunnableLambda(format_docs),
@@ -140,7 +132,6 @@ QUESTION: {question}
     )
     return rag_chain
 
-
 def reset_session():
     """Resets the Streamlit session state to start with a new video."""
     st.session_state.messages = [
@@ -148,32 +139,37 @@ def reset_session():
     ]
     st.session_state.rag_chain = None
     st.session_state.video_id = None
-    # +++ ADDED TO RESET FALLBACK STATE +++
     st.session_state.trigger_fallback = False
+    # This line is safe here because this function is only used as an on_click callback,
+    # which runs BEFORE the rest of the script reruns.
     if 'youtube_url_input' in st.session_state:
         st.session_state.youtube_url_input = ""
     get_transcript.clear()
 
 # --- Streamlit UI ---
 
-# UI FIX: Make the UI responsive by using the whole width
 st.set_page_config(page_title="YT-CHAT-AI", page_icon="📺", layout="wide")
 
 if 'last_interaction_time' in st.session_state and \
    (time.time() - st.session_state.last_interaction_time > SESSION_TIMEOUT_SECONDS):
     st.warning(f"Session timed out due to inactivity. Please start over.")
     reset_session()
+    st.rerun() # Force a rerun after reset
 
 if "messages" not in st.session_state:
-    reset_session()
-    
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Hi! I'm ready for a new video. Provide a URL to get started."}
+    ]
+    st.session_state.rag_chain = None
+    st.session_state.video_id = None
+    st.session_state.trigger_fallback = False
+
 if 'welcome_message_shown' not in st.session_state:
     st.toast("Welcome to Youtube Video Agent! 👋", icon="🎉")
     time.sleep(0.5)
     st.toast("Clear your doubts without watching the whole video.", icon="🚀")
     st.session_state.welcome_message_shown = True
 
-# UI FIX: Add a beautiful, colorful header without emojis
 st.markdown("""
 <div style="
     background: linear-gradient(90deg, #4F80C9, #7A60B3);
@@ -188,8 +184,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-
-# UI FIX: The "Get Started" window (expander) now stays open all the time.
 with st.expander("🔗 Get Started: Enter Video Details Here", expanded=True):
     youtube_url = st.text_input("YouTube URL", key="youtube_url_input", placeholder="e.g., https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
@@ -203,9 +197,15 @@ with st.expander("🔗 Get Started: Enter Video Details Here", expanded=True):
         if youtube_url:
             video_id = get_video_id(youtube_url)
             if video_id:
-                # Reset state for new video
-                reset_session() 
+                # +++ THE FIX IS HERE +++
+                # Instead of calling reset_session(), we do a "soft reset"
+                # to prepare for the new video without clearing the URL input field.
+                st.session_state.rag_chain = None
                 st.session_state.video_id = video_id
+                st.session_state.trigger_fallback = False
+                get_transcript.clear() 
+                # +++ END OF FIX +++
+                
                 language_code = LANGUAGES[selected_lang_name]
                 transcript = get_transcript(video_id, language_code)
                 if transcript:
@@ -214,6 +214,7 @@ with st.expander("🔗 Get Started: Enter Video Details Here", expanded=True):
                         {"role": "assistant", "content": f"I'm ready! Ask me anything about the video."}
                     ]
                     st.success("Assistant is ready! You can now ask questions below.")
+                    st.rerun() # Rerun to reflect the new state immediately
                 else:
                     st.session_state.video_id = None
             else:
@@ -227,6 +228,7 @@ with st.expander("🔗 Get Started: Enter Video Details Here", expanded=True):
         if st.session_state.get('youtube_url_input'):
              st.video(st.session_state.youtube_url_input)
         
+        # This button uses the full reset_session as a callback, which is correct.
         st.button("Chat with Another Video", on_click=reset_session)
 
 st.divider()
@@ -237,7 +239,7 @@ for message in st.session_state.messages:
         with st.container(border=True):
             st.markdown(message["content"])
 
-# --- Chat Input and Response Handling (MODIFIED FOR MEMORY & FALLBACK) ---
+# --- Chat Input and Response Handling ---
 if prompt := st.chat_input("Ask a question about the video..."):
     if st.session_state.rag_chain is None:
         st.error("Please set up a video in the 'Get Started' section above first.")
@@ -254,17 +256,14 @@ if prompt := st.chat_input("Ask a question about the video..."):
                 with st.spinner("Thinking..."):
                     try:
                         response = ""
-                        # Format the chat history for the LLM
                         chat_history = format_chat_history(st.session_state.messages)
                         
-                        # --- LOGIC FOR FALLBACK TO GENERAL LLM ---
                         if st.session_state.get('trigger_fallback', False):
                             st.info("Answering from general knowledge as requested...", icon="🧠")
                             
-                            # Create a general-purpose LLM chain
                             general_llm = ChatGoogleGenerativeAI(
                                 model="gemini-1.5-flash",
-                                temperature=0.7, # More creative for general chat
+                                temperature=0.7,
                                 google_api_key=st.secrets["GOOGLE_API_KEY"]
                             )
                             general_prompt = ChatPromptTemplate.from_messages([
@@ -278,22 +277,17 @@ if prompt := st.chat_input("Ask a question about the video..."):
                                 "question": prompt,
                                 "chat_history": chat_history
                             })
-                            # Reset the trigger after using it
                             st.session_state.trigger_fallback = False
                         
                         else:
-                            # --- DEFAULT RAG CHAIN INVOCATION ---
                             response = st.session_state.rag_chain.invoke({
                                 "question": prompt,
                                 "chat_history": chat_history
                             })
                             
-                            # Check if the RAG chain failed to find an answer
                             fail_message = "I am sorry, but the transcript does not contain information to answer that question."
-                            if response == fail_message:
-                                # Set the trigger for the next turn
+                            if response.strip() == fail_message:
                                 st.session_state.trigger_fallback = True
-                                # Add a helpful message for the user
                                 response += "\n\nIf you'd like me to try answering this from my general knowledge, please ask again."
                         
                         st.markdown(response)
