@@ -5,8 +5,8 @@ import streamlit as st
 from urllib.parse import urlparse, parse_qs
 
 # --- Environment and API Key Setup ---
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv  # <-- CHANGE: Removed this
+# load_dotenv()                   # <-- CHANGE: Removed this
 
 # --- LangChain and other necessary imports ---
 from langchain_community.vectorstores import FAISS
@@ -72,7 +72,13 @@ def create_rag_chain(_transcript: str):
     """Creates a RAG chain with OpenAI embeddings + Google Gemini LLM."""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     docs = text_splitter.create_documents([_transcript])
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    
+    # --- CHANGE: Pass API key directly from st.secrets ---
+    embeddings = OpenAIEmbeddings(
+        model="text-embedding-3-small",
+        api_key=st.secrets["OPENAI_API_KEY"] 
+    )
+    
     vector_store = FAISS.from_documents(docs, embeddings)
     retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
     
@@ -89,10 +95,11 @@ def create_rag_chain(_transcript: str):
     """
     prompt = PromptTemplate.from_template(template)
     
+    # --- CHANGE: Pass API key directly from st.secrets ---
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         temperature=0.3,
-        google_api_key=os.getenv("GOOGLE_API_KEY")
+        google_api_key=st.secrets["GOOGLE_API_KEY"]
     )
     
     def format_docs(retrieved_docs):
