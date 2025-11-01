@@ -49,13 +49,8 @@ def get_transcript(video_id: str, language: str) -> str | None:
     Fetches and formats the transcript for a given video ID and language.
     """
     try:
-        # --- USER CORRECTION: Changed the method call as requested ---
-        transcript_list_obj = YouTubeTranscriptApi().fetch(video_id, languages=[language])
-        
-        # --- FIX: Adapted the list comprehension to work with the object returned by .fetch() ---
-        # The .fetch() method returns a list of Transcript objects, which have a .text attribute.
-        transcript = " ".join(chunk.text for chunk in transcript_list_obj)
-        
+        transcript_list_obj = YouTubeTranscriptApi.get_transcript(video_id, languages=[language])
+        transcript = " ".join([d['text'] for d in transcript_list_obj])
         return transcript
     except TranscriptsDisabled:
         st.error(f"Transcripts are disabled for this video (ID: {video_id}). Please try another video.")
@@ -70,8 +65,6 @@ def get_transcript(video_id: str, language: str) -> str | None:
             st.error(f"Could not retrieve transcript for language '{language}'. This language might not be available, or another error occurred: {e}")
         return None
 
-# --- FIX: Caching decorator REMOVED from this function ---
-# This ensures a new RAG chain and database are created for each new video.
 def create_rag_chain(_transcript: str):
     """Creates a RAG chain with OpenAI embeddings + Google Gemini LLM."""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
@@ -99,7 +92,7 @@ def create_rag_chain(_transcript: str):
     prompt = PromptTemplate.from_template(template)
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash", # Updated to a generally available and strong model
         temperature=0.3,
         google_api_key=st.secrets["GOOGLE_API_KEY"]
     )
@@ -118,8 +111,6 @@ def create_rag_chain(_transcript: str):
     )
     return rag_chain
 
-
-# --- FIX: Updated the reset_session function to clear all necessary states ---
 def reset_session():
     """Resets the Streamlit session state to start with a new video."""
     st.session_state.messages = [
@@ -180,10 +171,13 @@ with st.sidebar:
 
     if st.session_state.get('video_id'):
         st.success(f"Video Loaded")
-        st.video(st.session_state.youtube_url_input)
-        if st.button("Chat with Another Video"):
-            reset_session()
-            st.rerun()
+        # Display the video using the url from the input field
+        if st.session_state.get('youtube_url_input'):
+            st.video(st.session_state.youtube_url_input)
+        
+        # --- THIS IS THE FIX ---
+        # Use on_click to call the reset function before the script reruns
+        st.button("Chat with Another Video", on_click=reset_session)
 
 st.title("📺 Chat with any YouTube Video")
 st.write("Enter a YouTube URL in the sidebar, choose the transcript language, and start asking questions!")
