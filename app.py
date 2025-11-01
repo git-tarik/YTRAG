@@ -41,7 +41,7 @@ def get_video_id(url: str) -> str | None:
         return match.group(1)
     return None
 
-# --- Core RAG Functions ---
+# --- Core RAG Functions (No changes) ---
 
 @st.cache_data(show_spinner="Fetching transcript...")
 def get_transcript(video_id: str, language: str) -> str | None:
@@ -135,7 +135,8 @@ def reset_session():
 
 # --- Streamlit UI ---
 
-st.set_page_config(page_title="Chat with YouTube", page_icon="📺", layout="centered")
+# UI FIX (d): Change the app name in the browser tab
+st.set_page_config(page_title="YT-CHAT-AI", page_icon="📺", layout="centered")
 
 if 'last_interaction_time' in st.session_state and \
    (time.time() - st.session_state.last_interaction_time > SESSION_TIMEOUT_SECONDS):
@@ -144,9 +145,21 @@ if 'last_interaction_time' in st.session_state and \
 
 if "messages" not in st.session_state:
     reset_session()
+    
+# UI FIX (c): Show a one-time, pop-up welcome message using toast
+if 'welcome_message_shown' not in st.session_state:
+    st.toast("Welcome to Youtube Video Agent! 👋", icon="🎉")
+    time.sleep(0.5) # A small delay for a better visual effect
+    st.toast("Clear your doubts without watching the whole video.", icon="🚀")
+    st.session_state.welcome_message_shown = True
 
-with st.sidebar:
-    st.header("🔗 Video Setup")
+# UI FIX (c): Change the main heading
+st.title("YT-CHAT-AI 🤖")
+
+# UI FIX (a): Move video setup from sidebar to a main page expander
+# The expander will be open by default and collapse after a video is loaded.
+is_setup_done = st.session_state.get('rag_chain') is not None
+with st.expander("🔗 Get Started: Enter Video Details Here", expanded=not is_setup_done):
     youtube_url = st.text_input("YouTube URL", key="youtube_url_input")
 
     selected_lang_name = st.selectbox(
@@ -169,6 +182,7 @@ with st.sidebar:
                         {"role": "assistant", "content": f"I'm ready! Ask me anything about the video."}
                     ]
                     st.success("Assistant is ready!")
+                    st.rerun() # Rerun to collapse the expander
                 else:
                     st.session_state.video_id = None # Reset if transcript fails
             else:
@@ -176,39 +190,45 @@ with st.sidebar:
         else:
             st.warning("Please provide a YouTube URL.")
 
-    st.divider()
-
-    if st.session_state.get('video_id'):
-        st.success(f"Video Loaded")
+    # Show video and reset button only after successful setup
+    if st.session_state.get('video_id') and st.session_state.get('rag_chain'):
+        st.divider()
+        st.success(f"Video Loaded Successfully!")
         if st.session_state.get('youtube_url_input'):
              st.video(st.session_state.youtube_url_input)
         
-        # This on_click callback prevents the "cannot be modified" error
         st.button("Chat with Another Video", on_click=reset_session)
 
-st.title("📺 Chat with any YouTube Video")
-st.write("Enter a YouTube URL in the sidebar, choose the transcript language, and start asking questions!")
 st.divider()
 
+# --- Chat History Display ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"], avatar="🤖" if message["role"] == "assistant" else "👤"):
-        st.markdown(message["content"])
+        # UI FIX (b): Add a border to chat messages for a "boxy" look
+        with st.container(border=True):
+            st.markdown(message["content"])
 
+# --- Chat Input and Response Handling ---
 if prompt := st.chat_input("Ask a question about the video..."):
     if st.session_state.rag_chain is None:
-        st.error("Please set up a video in the sidebar first.")
+        st.error("Please set up a video in the expander above first.")
     else:
         st.session_state.last_interaction_time = time.time()
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user", avatar="👤"):
-            st.markdown(prompt)
+            # UI FIX (b): Add a border to the new user message
+            with st.container(border=True):
+                st.markdown(prompt)
+
         with st.chat_message("assistant", avatar="🤖"):
-            with st.spinner("Thinking..."):
-                try:
-                    response = st.session_state.rag_chain.invoke(prompt)
-                    st.markdown(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                except Exception as e:
-                    error_message = f"An error occurred: {e}"
-                    st.error(error_message)
-                    st.session_state.messages.append({"role": "assistant", "content": error_message})
+            # UI FIX (b): Add a border to the new assistant message
+            with st.container(border=True):
+                with st.spinner("Thinking..."):
+                    try:
+                        response = st.session_state.rag_chain.invoke(prompt)
+                        st.markdown(response)
+                        st.session_state.messages.append({"role": "assistant", "content": response})
+                    except Exception as e:
+                        error_message = f"An error occurred: {e}"
+                        st.error(error_message) # st.error has its own distinct style
+                        st.session_state.messages.append({"role": "assistant", "content": error_message})
