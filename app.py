@@ -50,8 +50,13 @@ def get_transcript(video_id: str, language: str) -> str | None:
     This implementation now strictly follows your provided code structure.
     """
     try:
+        # 1. Create an instance and call .fetch() as you requested.
         fetched_transcript_object = YouTubeTranscriptApi().fetch(video_id, languages=[language])
+        
+        # 2. Call .to_raw_data() on the returned object.
         transcript_list = fetched_transcript_object.to_raw_data()
+        
+        # 3. Join the text from the list of dictionaries.
         transcript = " ".join(chunk["text"] for chunk in transcript_list)
         return transcript
         
@@ -60,12 +65,13 @@ def get_transcript(video_id: str, language: str) -> str | None:
         return None
     except Exception as e:
         st.error(f"Could not retrieve transcript for language '{language}'. Error: {e}")
+        # This helper message can be useful if the primary fetch fails.
         try:
             available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
             available_langs = [t.language_code for t in available_transcripts]
             st.warning(f"This video has transcripts available for: {', '.join(available_langs)}")
         except Exception:
-            pass
+            pass # Silently fail if listing transcripts also fails.
         return None
 
 
@@ -119,7 +125,6 @@ def create_rag_chain(_transcript: str):
 def reset_session():
     """Resets the Streamlit session state to start with a new video."""
     st.session_state.messages = [
-        # UI FIX: Changed AI emoji
         {"role": "assistant", "content": "Hi! I'm ready for a new video. Provide a URL to get started."}
     ]
     st.session_state.rag_chain = None
@@ -130,8 +135,8 @@ def reset_session():
 
 # --- Streamlit UI ---
 
-# UI FIX: Make the UI responsive by using the whole width
-st.set_page_config(page_title="YT-CHAT-AI", page_icon="📺", layout="wide")
+# UI FIX (d): Change the app name in the browser tab
+st.set_page_config(page_title="YT-CHAT-AI", page_icon="📺", layout="centered")
 
 if 'last_interaction_time' in st.session_state and \
    (time.time() - st.session_state.last_interaction_time > SESSION_TIMEOUT_SECONDS):
@@ -141,31 +146,21 @@ if 'last_interaction_time' in st.session_state and \
 if "messages" not in st.session_state:
     reset_session()
     
+# UI FIX (c): Show a one-time, pop-up welcome message using toast
 if 'welcome_message_shown' not in st.session_state:
     st.toast("Welcome to Youtube Video Agent! 👋", icon="🎉")
-    time.sleep(0.5)
+    time.sleep(0.5) # A small delay for a better visual effect
     st.toast("Clear your doubts without watching the whole video.", icon="🚀")
     st.session_state.welcome_message_shown = True
 
-# UI FIX: Add a beautiful, colorful header without emojis
-st.markdown("""
-<div style="
-    background: linear-gradient(90deg, #4F80C9, #7A60B3);
-    padding: 1.5rem;
-    border-radius: 10px;
-    color: white;
-    text-align: center;
-    margin-bottom: 20px;
-">
-<h1 style="color:white; font-size: 2.5rem; font-weight: bold; margin: 0;">YT-CHAT-AI</h1>
-<p style="margin: 5px 0 0 0; font-size: 1.1rem;">Your Intelligent YouTube Video Assistant</p>
-</div>
-""", unsafe_allow_html=True)
+# UI FIX (c): Change the main heading
+st.title("YT-CHAT-AI 🤖")
 
-
-# UI FIX: The "Get Started" window (expander) now stays open all the time.
-with st.expander("🔗 Get Started: Enter Video Details Here", expanded=True):
-    youtube_url = st.text_input("YouTube URL", key="youtube_url_input", placeholder="e.g., https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+# UI FIX (a): Move video setup from sidebar to a main page expander
+# The expander will be open by default and collapse after a video is loaded.
+is_setup_done = st.session_state.get('rag_chain') is not None
+with st.expander("🔗 Get Started: Enter Video Details Here", expanded=not is_setup_done):
+    youtube_url = st.text_input("YouTube URL", key="youtube_url_input")
 
     selected_lang_name = st.selectbox(
         "Select Transcript Language",
@@ -186,15 +181,16 @@ with st.expander("🔗 Get Started: Enter Video Details Here", expanded=True):
                     st.session_state.messages = [
                         {"role": "assistant", "content": f"I'm ready! Ask me anything about the video."}
                     ]
-                    st.success("Assistant is ready! You can now ask questions below.")
-                    # Removed st.rerun() so the expander stays open
+                    st.success("Assistant is ready!")
+                    st.rerun() # Rerun to collapse the expander
                 else:
-                    st.session_state.video_id = None
+                    st.session_state.video_id = None # Reset if transcript fails
             else:
                 st.error("Invalid YouTube URL. Please enter a valid one.")
         else:
             st.warning("Please provide a YouTube URL.")
 
+    # Show video and reset button only after successful setup
     if st.session_state.get('video_id') and st.session_state.get('rag_chain'):
         st.divider()
         st.success(f"Video Loaded Successfully!")
@@ -207,24 +203,25 @@ st.divider()
 
 # --- Chat History Display ---
 for message in st.session_state.messages:
-    # UI FIX: Changed AI emoji
-    with st.chat_message(message["role"], avatar="✨" if message["role"] == "assistant" else "👤"):
+    with st.chat_message(message["role"], avatar="🤖" if message["role"] == "assistant" else "👤"):
+        # UI FIX (b): Add a border to chat messages for a "boxy" look
         with st.container(border=True):
             st.markdown(message["content"])
 
 # --- Chat Input and Response Handling ---
 if prompt := st.chat_input("Ask a question about the video..."):
     if st.session_state.rag_chain is None:
-        st.error("Please set up a video in the 'Get Started' section above first.")
+        st.error("Please set up a video in the expander above first.")
     else:
         st.session_state.last_interaction_time = time.time()
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user", avatar="👤"):
+            # UI FIX (b): Add a border to the new user message
             with st.container(border=True):
                 st.markdown(prompt)
 
-        # UI FIX: Changed AI emoji
-        with st.chat_message("assistant", avatar="✨"):
+        with st.chat_message("assistant", avatar="🤖"):
+            # UI FIX (b): Add a border to the new assistant message
             with st.container(border=True):
                 with st.spinner("Thinking..."):
                     try:
@@ -233,5 +230,5 @@ if prompt := st.chat_input("Ask a question about the video..."):
                         st.session_state.messages.append({"role": "assistant", "content": response})
                     except Exception as e:
                         error_message = f"An error occurred: {e}"
-                        st.error(error_message)
+                        st.error(error_message) # st.error has its own distinct style
                         st.session_state.messages.append({"role": "assistant", "content": error_message})
