@@ -1,24 +1,11 @@
-# --- Core dependencies ---
-streamlit==1.39.0
+streamlit==1.51.0
 python-dotenv==1.0.1
-
-# --- LangChain ecosystem ---
 langchain==0.3.7
-langchain-core==0.3.15
+langchain-core==0.3.17
 langchain-community==0.3.7
 langchain-openai==0.2.3
-langchain-google-genai==0.2.2
-langchain-text-splitters==0.3.1
-
-# --- Vector store backend ---
-faiss-cpu==1.8.0.post1
-
-# --- YouTube transcript extraction ---
-youtube-transcript-api==0.6.2
-
-# --- Utilities ---
-tqdm==4.66.5
+langchain-google-genai==1.0.3
+faiss-cpu==1.8.0
+youtube-transcript-api==1.2.3
+tiktoken==0.7.0
 requests==2.32.3
-
-# --- Optional: if using Jupyter or Colab ---
-ipykernel==6.29.5
