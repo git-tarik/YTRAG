@@ -49,8 +49,17 @@ def get_transcript(video_id: str, language: str) -> str | None:
     Fetches and formats the transcript for a given video ID and language.
     """
     try:
-        transcript_list_obj = YouTubeTranscriptApi().fetch(video_id, languages=[language])
-        transcript = " ".join([d['text'] for d in transcript_list_obj])
+        # --- FIX: Reverted to your original working implementation ---
+        # This correctly uses .fetch() which returns a list of Transcript objects.
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        transcript_obj = transcript_list.find_transcript([language])
+        
+        # Now we fetch the actual transcript data which is a list of dictionaries
+        transcript_chunks = transcript_obj.fetch()
+
+        # We join the 'text' from each dictionary chunk
+        transcript = " ".join(chunk['text'] for chunk in transcript_chunks)
+        
         return transcript
     except TranscriptsDisabled:
         st.error(f"Transcripts are disabled for this video (ID: {video_id}). Please try another video.")
@@ -59,9 +68,9 @@ def get_transcript(video_id: str, language: str) -> str | None:
         # Attempt to find available transcripts if the selected one fails
         try:
             available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
-            available_langs = [t.language for t in available_transcripts]
+            available_langs = [t.language_code for t in available_transcripts]
             st.error(f"Could not retrieve transcript for language '{language}'. This video has transcripts available for: {', '.join(available_langs)}. Please select one of these.")
-        except Exception:
+        except Exception as inner_e:
             st.error(f"Could not retrieve transcript for language '{language}'. This language might not be available, or another error occurred: {e}")
         return None
 
@@ -92,7 +101,7 @@ def create_rag_chain(_transcript: str):
     prompt = PromptTemplate.from_template(template)
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", # Updated to a generally available and strong model
+        model="gemini-1.5-flash",
         temperature=0.3,
         google_api_key=st.secrets["GOOGLE_API_KEY"]
     )
@@ -111,6 +120,7 @@ def create_rag_chain(_transcript: str):
     )
     return rag_chain
 
+
 def reset_session():
     """Resets the Streamlit session state to start with a new video."""
     st.session_state.messages = [
@@ -118,10 +128,8 @@ def reset_session():
     ]
     st.session_state.rag_chain = None
     st.session_state.video_id = None
-    # This line specifically clears the text in the URL input box
     if 'youtube_url_input' in st.session_state:
         st.session_state.youtube_url_input = ""
-    # Clear any cached transcripts from previous runs to be safe
     get_transcript.clear()
 
 # --- Streamlit UI ---
@@ -171,12 +179,10 @@ with st.sidebar:
 
     if st.session_state.get('video_id'):
         st.success(f"Video Loaded")
-        # Display the video using the url from the input field
         if st.session_state.get('youtube_url_input'):
-            st.video(st.session_state.youtube_url_input)
+             st.video(st.session_state.youtube_url_input)
         
-        # --- THIS IS THE FIX ---
-        # Use on_click to call the reset function before the script reruns
+        # --- FIX 2: Using on_click to prevent the error when resetting state ---
         st.button("Chat with Another Video", on_click=reset_session)
 
 st.title("📺 Chat with any YouTube Video")
