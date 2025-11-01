@@ -83,7 +83,7 @@ def create_rag_chain(transcript: str):
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         temperature=0.2,
-        max_output_tokens=500,
+        max_output_tokens=1000,
         google_api_key=os.getenv("GOOGLE_API_KEY")
     )
 

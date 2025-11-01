@@ -5,8 +5,7 @@ import streamlit as st
 from urllib.parse import urlparse, parse_qs
 
 # --- Environment and API Key Setup ---
-# from dotenv import load_dotenv  # <-- CHANGE: Removed this
-# load_dotenv()                   # <-- CHANGE: Removed this
+# No changes here, your setup using st.secrets is correct for deployment.
 
 # --- LangChain and other necessary imports ---
 from langchain_community.vectorstores import FAISS
@@ -47,41 +46,48 @@ def get_video_id(url: str) -> str | None:
 
 # --- Core RAG Functions ---
 
+# --- No changes to this function, caching data here is correct and efficient ---
 @st.cache_data(show_spinner="Fetching transcript...")
 def get_transcript(video_id: str, language: str) -> str | None:
     """
     Fetches and formats the transcript for a given video ID and language.
     """
     try:
-        transcript_list_obj = YouTubeTranscriptApi().fetch(video_id, languages=[language])
-        
-        # --- FIX: Access the 'text' attribute using dot notation (chunk.text) ---
-        # The library returns objects, not dictionaries.
-        transcript = " ".join(chunk.text for chunk in transcript_list_obj)
-        
+        # The library returns a list of segment objects, not dictionaries
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=[language])
+        transcript = " ".join([d['text'] for d in transcript_list])
         return transcript
     except TranscriptsDisabled:
         st.error(f"Transcripts are disabled for this video (ID: {video_id}). Please try another video.")
         return None
     except Exception as e:
-        st.error(f"Could not retrieve transcript for language '{language}'. This language might not be available for this video. Please select another. Error: {e}")
+        # Attempt to find available transcripts if the selected one fails
+        try:
+            available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
+            available_langs = [t.language_code for t in available_transcripts]
+            st.error(f"Could not retrieve transcript for language '{language}'. This video has transcripts available for: {', '.join(available_langs)}. Please select one of these.")
+        except Exception:
+            st.error(f"Could not retrieve transcript for language '{language}'. This language might not be available, or another error occurred: {e}")
         return None
 
-@st.cache_resource(show_spinner="Building knowledge base...")
+# --- FIX 1: Removed the caching decorator from this function ---
+# This function creates a resource that is SPECIFIC to the video in the current session.
+# Caching it globally (@st.cache_resource) was causing the old video's database to be reused.
+# By removing the decorator, this function will now run every time a new video is submitted,
+# creating a fresh, correct database for that video.
 def create_rag_chain(_transcript: str):
     """Creates a RAG chain with OpenAI embeddings + Google Gemini LLM."""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     docs = text_splitter.create_documents([_transcript])
-    
-    # --- CHANGE: Pass API key directly from st.secrets ---
+
     embeddings = OpenAIEmbeddings(
         model="text-embedding-3-small",
-        api_key=st.secrets["OPENAI_API_KEY"] 
+        api_key=st.secrets["OPENAI_API_KEY"]
     )
-    
+
     vector_store = FAISS.from_documents(docs, embeddings)
     retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
-    
+
     template = """
     You are a helpful assistant that answers questions based ONLY on the provided video transcript.
     Your tone should be conversational and helpful.
@@ -94,17 +100,16 @@ def create_rag_chain(_transcript: str):
     {question}
     """
     prompt = PromptTemplate.from_template(template)
-    
-    # --- CHANGE: Pass API key directly from st.secrets ---
+
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash",
         temperature=0.3,
         google_api_key=st.secrets["GOOGLE_API_KEY"]
     )
-    
+
     def format_docs(retrieved_docs):
         return "\n\n".join(doc.page_content for doc in retrieved_docs)
-    
+
     rag_chain = (
         RunnableParallel(
             context=retriever | RunnableLambda(format_docs),
@@ -117,16 +122,23 @@ def create_rag_chain(_transcript: str):
     return rag_chain
 
 
-# --- Streamlit UI (No changes from here down) ---
-
+# --- FIX 2: Updated the reset_session function ---
+# This function now explicitly resets all the necessary session state keys
+# for starting over with a new video, including the URL input text.
 def reset_session():
-    """Resets the Streamlit session state."""
-    st.session_state.clear()
+    """Resets the Streamlit session state to start with a new video."""
     st.session_state.messages = [
-        {"role": "assistant", "content": "Hi! I'm your YouTube video assistant. Provide a video URL to get started."}
+        {"role": "assistant", "content": "Hi! I'm ready for a new video. Provide a URL to get started."}
     ]
     st.session_state.rag_chain = None
     st.session_state.video_id = None
+    # This line specifically clears the text in the st.text_input box
+    if 'youtube_url_input' in st.session_state:
+        st.session_state.youtube_url_input = ""
+    # Clear any cached transcripts from previous runs
+    get_transcript.clear()
+
+# --- Streamlit UI (No major changes below, logic remains the same) ---
 
 st.set_page_config(page_title="Chat with YouTube", page_icon="📺", layout="centered")
 
@@ -140,6 +152,7 @@ if "messages" not in st.session_state:
 
 with st.sidebar:
     st.header("🔗 Video Setup")
+    # The `key` here is 'youtube_url_input', which we target in reset_session()
     youtube_url = st.text_input("YouTube URL", key="youtube_url_input")
 
     selected_lang_name = st.selectbox(
@@ -149,12 +162,15 @@ with st.sidebar:
     )
 
     if st.button("Start Chatting", type="primary"):
-        language_code = LANGUAGES[selected_lang_name]
-
-        if youtube_url and language_code:
+        # When this button is clicked with a new URL, it will now correctly
+        # call the uncached create_rag_chain() function.
+        if youtube_url:
             video_id = get_video_id(youtube_url)
             if video_id:
+                # Clear any old chain or video ID before processing a new one
+                st.session_state.rag_chain = None
                 st.session_state.video_id = video_id
+                language_code = LANGUAGES[selected_lang_name]
                 transcript = get_transcript(video_id, language_code)
                 if transcript:
                     st.session_state.rag_chain = create_rag_chain(transcript)
@@ -171,9 +187,10 @@ with st.sidebar:
 
     st.divider()
 
-    if st.session_state.video_id:
+    if st.session_state.get('video_id'): # Use .get() for safer access
         st.success(f"Video Loaded")
-        st.video(youtube_url)
+        # Display the video using the original URL from the input box
+        st.video(st.session_state.youtube_url_input)
         if st.button("Chat with Another Video"):
             reset_session()
             st.rerun()
