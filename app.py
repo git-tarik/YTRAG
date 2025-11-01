@@ -3,12 +3,16 @@ import re
 import time
 import streamlit as st
 from urllib.parse import urlparse, parse_qs
+from operator import itemgetter  # +++ ADDED FOR CHAINING
 
 # --- LangChain and other necessary imports ---
 from langchain_community.vectorstores import FAISS
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
+# +++ ADDED FOR CHAT HISTORY +++
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.runnables import RunnableLambda, RunnableParallel, RunnablePassthrough
+# +++ ADDED FOR CHAT HISTORY MESSAGE FORMATTING +++
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
@@ -41,7 +45,7 @@ def get_video_id(url: str) -> str | None:
         return match.group(1)
     return None
 
-# --- Core RAG Functions (No changes) ---
+# --- Core RAG Functions ---
 
 @st.cache_data(show_spinner="Fetching transcript...")
 def get_transcript(video_id: str, language: str) -> str | None:
@@ -68,7 +72,19 @@ def get_transcript(video_id: str, language: str) -> str | None:
             pass
         return None
 
+# +++ NEW HELPER FUNCTION FOR CHAT MEMORY +++
+def format_chat_history(messages):
+    """Formats chat history from Streamlit's message format to LangChain's format."""
+    history = []
+    # Loop through all messages except the last one, which is the current user prompt
+    for msg in messages[:-1]:
+        if msg["role"] == "user":
+            history.append(HumanMessage(content=msg["content"]))
+        else:
+            history.append(AIMessage(content=msg["content"]))
+    return history
 
+# +++ MODIFIED create_rag_chain FOR CHAT MEMORY AND BETTER FALLBACK +++
 def create_rag_chain(_transcript: str):
     """Creates a RAG chain with OpenAI embeddings + Google Gemini LLM."""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
@@ -82,21 +98,28 @@ def create_rag_chain(_transcript: str):
     vector_store = FAISS.from_documents(docs, embeddings)
     retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
 
-    template = """
-    You are a helpful assistant that answers questions based ONLY on the provided video transcript.
-    Your tone should be conversational and helpful.
-    If the context is insufficient to answer the question, politely state that the information is not in the transcript.
+    # This is the prompt for the RAG chain. Note the specific instruction for out-of-context questions.
+    rag_template = """
+You are a helpful assistant that answers questions based ONLY on the provided video transcript context.
+Your tone should be conversational and helpful.
 
-    CONTEXT:
-    {context}
+If the context is insufficient to answer the question, you MUST respond with ONLY the following exact sentence:
+"I am sorry, but the transcript does not contain information to answer that question."
 
-    QUESTION:
-    {question}
-    """
-    prompt = PromptTemplate.from_template(template)
+CONTEXT:
+{context}
+
+QUESTION: {question}
+"""
+    # Using ChatPromptTemplate to handle conversation history
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", rag_template),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{question}")
+    ])
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash", # Using 1.5 Flash for better context following
         temperature=0.3,
         google_api_key=st.secrets["GOOGLE_API_KEY"]
     )
@@ -104,11 +127,13 @@ def create_rag_chain(_transcript: str):
     def format_docs(retrieved_docs):
         return "\n\n".join(doc.page_content for doc in retrieved_docs)
 
+    # The chain now expects a dictionary with "question" and "chat_history"
     rag_chain = (
-        RunnableParallel(
-            context=retriever | RunnableLambda(format_docs),
-            question=RunnablePassthrough()
-        )
+        {
+            "context": itemgetter("question") | retriever | RunnableLambda(format_docs),
+            "question": itemgetter("question"),
+            "chat_history": itemgetter("chat_history")
+        }
         | prompt
         | llm
         | StrOutputParser()
@@ -119,11 +144,12 @@ def create_rag_chain(_transcript: str):
 def reset_session():
     """Resets the Streamlit session state to start with a new video."""
     st.session_state.messages = [
-        # UI FIX: Changed AI emoji
         {"role": "assistant", "content": "Hi! I'm ready for a new video. Provide a URL to get started."}
     ]
     st.session_state.rag_chain = None
     st.session_state.video_id = None
+    # +++ ADDED TO RESET FALLBACK STATE +++
+    st.session_state.trigger_fallback = False
     if 'youtube_url_input' in st.session_state:
         st.session_state.youtube_url_input = ""
     get_transcript.clear()
@@ -177,7 +203,8 @@ with st.expander("🔗 Get Started: Enter Video Details Here", expanded=True):
         if youtube_url:
             video_id = get_video_id(youtube_url)
             if video_id:
-                st.session_state.rag_chain = None
+                # Reset state for new video
+                reset_session() 
                 st.session_state.video_id = video_id
                 language_code = LANGUAGES[selected_lang_name]
                 transcript = get_transcript(video_id, language_code)
@@ -187,7 +214,6 @@ with st.expander("🔗 Get Started: Enter Video Details Here", expanded=True):
                         {"role": "assistant", "content": f"I'm ready! Ask me anything about the video."}
                     ]
                     st.success("Assistant is ready! You can now ask questions below.")
-                    # Removed st.rerun() so the expander stays open
                 else:
                     st.session_state.video_id = None
             else:
@@ -207,30 +233,72 @@ st.divider()
 
 # --- Chat History Display ---
 for message in st.session_state.messages:
-    # UI FIX: Changed AI emoji
     with st.chat_message(message["role"], avatar="✨" if message["role"] == "assistant" else "👤"):
         with st.container(border=True):
             st.markdown(message["content"])
 
-# --- Chat Input and Response Handling ---
+# --- Chat Input and Response Handling (MODIFIED FOR MEMORY & FALLBACK) ---
 if prompt := st.chat_input("Ask a question about the video..."):
     if st.session_state.rag_chain is None:
         st.error("Please set up a video in the 'Get Started' section above first.")
     else:
         st.session_state.last_interaction_time = time.time()
         st.session_state.messages.append({"role": "user", "content": prompt})
+        
         with st.chat_message("user", avatar="👤"):
             with st.container(border=True):
                 st.markdown(prompt)
 
-        # UI FIX: Changed AI emoji
         with st.chat_message("assistant", avatar="✨"):
             with st.container(border=True):
                 with st.spinner("Thinking..."):
                     try:
-                        response = st.session_state.rag_chain.invoke(prompt)
+                        response = ""
+                        # Format the chat history for the LLM
+                        chat_history = format_chat_history(st.session_state.messages)
+                        
+                        # --- LOGIC FOR FALLBACK TO GENERAL LLM ---
+                        if st.session_state.get('trigger_fallback', False):
+                            st.info("Answering from general knowledge as requested...", icon="🧠")
+                            
+                            # Create a general-purpose LLM chain
+                            general_llm = ChatGoogleGenerativeAI(
+                                model="gemini-1.5-flash",
+                                temperature=0.7, # More creative for general chat
+                                google_api_key=st.secrets["GOOGLE_API_KEY"]
+                            )
+                            general_prompt = ChatPromptTemplate.from_messages([
+                                ("system", "You are a helpful conversational assistant. Answer the user's question based on the chat history and your general knowledge."),
+                                MessagesPlaceholder(variable_name="chat_history"),
+                                ("human", "{question}")
+                            ])
+                            general_chain = general_prompt | general_llm | StrOutputParser()
+                            
+                            response = general_chain.invoke({
+                                "question": prompt,
+                                "chat_history": chat_history
+                            })
+                            # Reset the trigger after using it
+                            st.session_state.trigger_fallback = False
+                        
+                        else:
+                            # --- DEFAULT RAG CHAIN INVOCATION ---
+                            response = st.session_state.rag_chain.invoke({
+                                "question": prompt,
+                                "chat_history": chat_history
+                            })
+                            
+                            # Check if the RAG chain failed to find an answer
+                            fail_message = "I am sorry, but the transcript does not contain information to answer that question."
+                            if response == fail_message:
+                                # Set the trigger for the next turn
+                                st.session_state.trigger_fallback = True
+                                # Add a helpful message for the user
+                                response += "\n\nIf you'd like me to try answering this from my general knowledge, please ask again."
+                        
                         st.markdown(response)
                         st.session_state.messages.append({"role": "assistant", "content": response})
+
                     except Exception as e:
                         error_message = f"An error occurred: {e}"
                         st.error(error_message)
