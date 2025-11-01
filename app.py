@@ -102,7 +102,7 @@ def create_rag_chain(_transcript: str):
     prompt = PromptTemplate.from_template(template)
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         temperature=0.3,
         google_api_key=st.secrets["GOOGLE_API_KEY"]
     )
