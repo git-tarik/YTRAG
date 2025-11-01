@@ -49,7 +49,7 @@ def get_transcript(video_id: str, language: str) -> str | None:
     Fetches and formats the transcript for a given video ID and language.
     """
     try:
-        transcript_list_obj = YouTubeTranscriptApi.get_transcript(video_id, languages=[language])
+        transcript_list_obj = YouTubeTranscriptApi().fetch(video_id, languages=[language])
         transcript = " ".join([d['text'] for d in transcript_list_obj])
         return transcript
     except TranscriptsDisabled:
