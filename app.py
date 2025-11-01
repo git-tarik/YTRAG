@@ -8,8 +8,7 @@ from urllib.parse import urlparse, parse_qs
 from langchain_community.vectorstores import FAISS
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
-# MODIFICATION: Import itemgetter for the new chain
-from langchain_core.runnables import RunnableLambda, RunnableParallel, RunnablePassthrough, itemgetter
+from langchain_core.runnables import RunnableLambda, RunnableParallel, RunnablePassthrough
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
@@ -83,41 +82,21 @@ def create_rag_chain(_transcript: str):
     vector_store = FAISS.from_documents(docs, embeddings)
     retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
 
-    # MODIFICATION: Updated prompt template for chat history and fallback logic (Request A & B)
     template = """
-    You are a helpful assistant answering questions about a video, using ONLY the provided transcript context.
-    You MUST answer in a conversational tone.
-    You will be given the conversation history and a new question.
+    You are a helpful assistant that answers questions based ONLY on the provided video transcript.
+    Your tone should be conversational and helpful.
+    If the context is insufficient to answer the question, politely state that the information is not in the transcript.
 
-    Use the chat history to understand the context of the new question.
-    Use the retrieved transcript context to find the answer.
-
-    1.  First, try to answer the question using ONLY the retrieved "TRANSCRIPT CONTEXT".
-    2.  If the answer is in the transcript context, answer the question based on it.
-    3.  If the answer is NOT in the transcript context, politely state that the video transcript doesn't seem to have that specific detail.
-    4.  **After** stating the information is not in the transcript, you may *then* provide a helpful answer from your own general knowledge, but you MUST explicitly say "From my general knowledge,..." or "As for a general answer,...".
-    5.  If the user is just making small talk (e.g., "hello", "thanks"), respond politely.
-
-    CHAT HISTORY:
-    {chat_history}
-
-    TRANSCRIPT CONTEXT:
+    CONTEXT:
     {context}
 
-    NEW QUESTION:
+    QUESTION:
     {question}
-
-    ANSWER:
     """
-    
-    # MODIFICATION: Update prompt to accept new variables
-    prompt = PromptTemplate(
-        template=template,
-        input_variables=["chat_history", "context", "question"]
-    )
+    prompt = PromptTemplate.from_template(template)
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", # Changed to 1.5-flash for better reasoning
+        model="gemini-2.5-flash",
         temperature=0.3,
         google_api_key=st.secrets["GOOGLE_API_KEY"]
     )
@@ -125,15 +104,10 @@ def create_rag_chain(_transcript: str):
     def format_docs(retrieved_docs):
         return "\n\n".join(doc.page_content for doc in retrieved_docs)
 
-    # MODIFICATION: Re-defined the chain to properly handle dictionary
-    # input {"question": ..., "chat_history": ...} using itemgetter.
     rag_chain = (
         RunnableParallel(
-            # The retriever needs the "question" part of the input dict
-            context=itemgetter("question") | retriever | RunnableLambda(format_docs),
-            # We pass the "question" and "chat_history" through directly
-            question=itemgetter("question"),
-            chat_history=itemgetter("chat_history")
+            context=retriever | RunnableLambda(format_docs),
+            question=RunnablePassthrough()
         )
         | prompt
         | llm
@@ -238,26 +212,6 @@ for message in st.session_state.messages:
         with st.container(border=True):
             st.markdown(message["content"])
 
-# --- ADDITION: Helper function to format chat history for the LLM ---
-def format_chat_history(messages):
-    """Formats chat history for the prompt, excluding the initial system message."""
-    if not messages:
-        return "No history yet."
-    
-    # Filter out the very first "Hi! I'm ready..." system greeting
-    history = [
-        msg for msg in messages 
-        if "Hi! I'm ready for a new video" not in msg.get("content", "")
-    ]
-    
-    # Format the rest
-    formatted = []
-    for msg in history:
-        role = "User" if msg["role"] == "user" else "Assistant"
-        formatted.append(f"{role}: {msg['content']}")
-    
-    return "\n".join(formatted)
-
 # --- Chat Input and Response Handling ---
 if prompt := st.chat_input("Ask a question about the video..."):
     if st.session_state.rag_chain is None:
@@ -274,21 +228,7 @@ if prompt := st.chat_input("Ask a question about the video..."):
             with st.container(border=True):
                 with st.spinner("Thinking..."):
                     try:
-                        # MODIFICATION: Prepare and send chat history (Request A)
-                        
-                        # Format the history *before* this new prompt
-                        # We send all messages *except* the new user prompt (which is passed as "question")
-                        history_string = format_chat_history(st.session_state.messages[:-1])
-                        
-                        # Prepare the input for the chain
-                        chain_input = {
-                            "question": prompt,
-                            "chat_history": history_string
-                        }
-                        
-                        # Invoke the chain with the new input structure
-                        response = st.session_state.rag_chain.invoke(chain_input)
-                        
+                        response = st.session_state.rag_chain.invoke(prompt)
                         st.markdown(response)
                         st.session_state.messages.append({"role": "assistant", "content": response})
                     except Exception as e:
