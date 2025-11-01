@@ -47,30 +47,31 @@ def get_video_id(url: str) -> str | None:
 def get_transcript(video_id: str, language: str) -> str | None:
     """
     Fetches and formats the transcript for a given video ID and language.
-    This version is based on your provided function and is made robust for Streamlit.
+    This implementation now strictly follows your provided code structure.
     """
     try:
-        # The most robust way to get a transcript is to list them, find the one you want, and fetch it.
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        transcript = transcript_list.find_transcript([language]).fetch()
+        # 1. Create an instance and call .fetch() as you requested.
+        fetched_transcript_object = YouTubeTranscriptApi().fetch(video_id, languages=[language])
         
-        full_transcript = " ".join([chunk['text'] for chunk in transcript])
-        return full_transcript
-
+        # 2. Call .to_raw_data() on the returned object.
+        transcript_list = fetched_transcript_object.to_raw_data()
+        
+        # 3. Join the text from the list of dictionaries.
+        transcript = " ".join(chunk["text"] for chunk in transcript_list)
+        return transcript
+        
     except TranscriptsDisabled:
         st.error(f"Transcripts are disabled for this video (ID: {video_id}). Please try another video.")
         return None
     except Exception as e:
-        # This block provides a more helpful error message if the chosen language isn't available.
-        st.error(f"Could not retrieve transcript for language '{language}'.")
+        st.error(f"Could not retrieve transcript for language '{language}'. Error: {e}")
+        # This helper message can be useful if the primary fetch fails.
         try:
-            # Attempt to list available languages for the user
             available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
             available_langs = [t.language_code for t in available_transcripts]
-            st.warning(f"This video has transcripts available for the following languages: {', '.join(available_langs)}")
+            st.warning(f"This video has transcripts available for: {', '.join(available_langs)}")
         except Exception:
-            # If listing also fails, show the original error
-            st.error(f"An unexpected error occurred, and I could not list available languages either. Error: {e}")
+            pass # Silently fail if listing transcripts also fails.
         return None
 
 
