@@ -208,7 +208,7 @@ st.divider()
 # --- Chat History Display ---
 for message in st.session_state.messages:
     # UI FIX: Changed AI emoji
-    with st.chat_message(message["role"], avatar="🧠" if message["role"] == "assistant" else "👤"):
+    with st.chat_message(message["role"], avatar="🤖" if message["role"] == "assistant" else "👤"):
         with st.container(border=True):
             st.markdown(message["content"])
 
