@@ -47,32 +47,32 @@ def get_video_id(url: str) -> str | None:
 def get_transcript(video_id: str, language: str) -> str | None:
     """
     Fetches and formats the transcript for a given video ID and language.
+    This version is based on your provided function and is made robust for Streamlit.
     """
     try:
-        # --- FIX: Reverted to your original working implementation ---
-        # This correctly uses .fetch() which returns a list of Transcript objects.
+        # The most robust way to get a transcript is to list them, find the one you want, and fetch it.
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        transcript_obj = transcript_list.find_transcript([language])
+        transcript = transcript_list.find_transcript([language]).fetch()
         
-        # Now we fetch the actual transcript data which is a list of dictionaries
-        transcript_chunks = transcript_obj.fetch()
+        full_transcript = " ".join([chunk['text'] for chunk in transcript])
+        return full_transcript
 
-        # We join the 'text' from each dictionary chunk
-        transcript = " ".join(chunk['text'] for chunk in transcript_chunks)
-        
-        return transcript
     except TranscriptsDisabled:
         st.error(f"Transcripts are disabled for this video (ID: {video_id}). Please try another video.")
         return None
     except Exception as e:
-        # Attempt to find available transcripts if the selected one fails
+        # This block provides a more helpful error message if the chosen language isn't available.
+        st.error(f"Could not retrieve transcript for language '{language}'.")
         try:
+            # Attempt to list available languages for the user
             available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
             available_langs = [t.language_code for t in available_transcripts]
-            st.error(f"Could not retrieve transcript for language '{language}'. This video has transcripts available for: {', '.join(available_langs)}. Please select one of these.")
-        except Exception as inner_e:
-            st.error(f"Could not retrieve transcript for language '{language}'. This language might not be available, or another error occurred: {e}")
+            st.warning(f"This video has transcripts available for the following languages: {', '.join(available_langs)}")
+        except Exception:
+            # If listing also fails, show the original error
+            st.error(f"An unexpected error occurred, and I could not list available languages either. Error: {e}")
         return None
+
 
 def create_rag_chain(_transcript: str):
     """Creates a RAG chain with OpenAI embeddings + Google Gemini LLM."""
@@ -169,7 +169,7 @@ with st.sidebar:
                     ]
                     st.success("Assistant is ready!")
                 else:
-                    st.session_state.video_id = None
+                    st.session_state.video_id = None # Reset if transcript fails
             else:
                 st.error("Invalid YouTube URL. Please enter a valid one.")
         else:
@@ -182,7 +182,7 @@ with st.sidebar:
         if st.session_state.get('youtube_url_input'):
              st.video(st.session_state.youtube_url_input)
         
-        # --- FIX 2: Using on_click to prevent the error when resetting state ---
+        # This on_click callback prevents the "cannot be modified" error
         st.button("Chat with Another Video", on_click=reset_session)
 
 st.title("📺 Chat with any YouTube Video")
