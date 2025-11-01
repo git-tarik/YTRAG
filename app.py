@@ -224,7 +224,7 @@ if prompt := st.chat_input("Ask a question about the video..."):
                 st.markdown(prompt)
 
         # UI FIX: Changed AI emoji
-        with st.chat_message("assistant", avatar="🧠"):
+        with st.chat_message("assistant", avatar="🤖"):
             with st.container(border=True):
                 with st.spinner("Thinking..."):
                     try:
